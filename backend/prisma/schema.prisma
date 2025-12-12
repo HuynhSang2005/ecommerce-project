@@ -1,0 +1,688 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  moduleFormat    = "cjs"
+  // previewFeatures = ["fullTextSearch", "postgresqlExtensions"] //  thêm fullTextSearch nếu cần tìm kiếm sản phẩm
+}
+
+generator json {
+  provider = "prisma-json-types-generator"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// CORE SYSTEM & LOCALIZATION
+// ==========================================
+
+model Language {
+  id                   String                @id @db.VarChar(10) // 'en', 'vi'
+  name                 String                @db.VarChar(500)
+  userTranslations     UserTranslation[]
+  productTranslations  ProductTranslation[]
+  categoryTranslations CategoryTranslation[]
+  brandTranslations    BrandTranslation[]
+
+  // Audit
+  createdById Int?
+  createdBy   User?     @relation("LanguageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById Int?
+  updatedBy   User?     @relation("LanguageUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedById Int?
+  deletedBy   User?     @relation("LanguageDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([deletedAt])
+}
+
+// ==========================================
+// USER & AUTHENTICATION
+// ==========================================
+
+model User {
+  id          Int        @id @default(autoincrement())
+  email       String     @unique
+  name        String     @db.VarChar(500)
+  password    String     @db.VarChar(500)
+  phoneNumber String?    @db.VarChar(50) // Phone có thể null nếu đăng ký bằng email
+  avatar      String?    @db.VarChar(1000)
+  totpSecret  String?    @db.VarChar(1000)
+  status      UserStatus @default(INACTIVE)
+
+  // RBAC
+  roleId Int
+  role   Role @relation(fields: [roleId], references: [id])
+
+  // Relations
+  addresses            UserAddress[]
+  devices              Device[]
+  refreshTokens        RefreshToken[]
+  carts                CartItem[]
+  orders               Order[]
+  reviews              Review[]
+  
+  // Chat System
+  sentMessages         Message[]             @relation("FromUser")
+  // receivedMessages  Message[]             @relation("ToUser") // Đã chuyển sang logic Conversation
+  conversationsStarted Conversation[]        @relation("ConversationStarter")
+  conversationsPartner Conversation[]        @relation("ConversationPartner")
+  webSockets           Websocket[]
+
+  // --- START AUDIT TRAILS (Hệ thống log ai làm gì) ---
+  createdPermissions          Permission[]          @relation("PermissionCreatedBy")
+  updatedPermissions          Permission[]          @relation("PermissionUpdatedBy")
+  deletedPermissions          Permission[]          @relation("PermissionDeletedBy")
+  createdRoles                Role[]                @relation("RoleCreatedBy")
+  updatedRoles                Role[]                @relation("RoleUpdatedBy")
+  deletedRoles                Role[]                @relation("RoleDeletedBy")
+  createdProducts             Product[]             @relation("ProductCreatedBy")
+  updatedProducts             Product[]             @relation("ProductUpdatedBy")
+  deletedProducts             Product[]             @relation("ProductDeletedBy")
+  createdCategories           Category[]            @relation("CategoryCreatedBy")
+  updatedCategories           Category[]            @relation("CategoryUpdatedBy")
+  deletedCategories           Category[]            @relation("CategoryDeletedBy")
+  createdSKUS                 SKU[]                 @relation("SKUCreatedBy")
+  updatedSKUS                 SKU[]                 @relation("SKUUpdatedBy")
+  deletedSKUS                 SKU[]                 @relation("SKUDeletedBy")
+  createdLanguages            Language[]            @relation("LanguageCreatedBy")
+  updatedLanguages            Language[]            @relation("LanguageUpdatedBy")
+  deletedLanguages            Language[]            @relation("LanguageDeletedBy")
+  createdBrands               Brand[]               @relation("BrandCreatedBy")
+  updatedBrands               Brand[]               @relation("BrandUpdatedBy")
+  deletedBrands               Brand[]               @relation("BrandDeletedBy")
+  createdProductTranslations  ProductTranslation[]  @relation("ProductTranslationCreatedBy")
+  updatedProductTranslations  ProductTranslation[]  @relation("ProductTranslationUpdatedBy")
+  deletedProductTranslations  ProductTranslation[]  @relation("ProductTranslationDeletedBy")
+  createdCategoryTranslations CategoryTranslation[] @relation("CategoryTranslationCreatedBy")
+  updatedCategoryTranslations CategoryTranslation[] @relation("CategoryTranslationUpdatedBy")
+  deletedCategoryTranslations CategoryTranslation[] @relation("CategoryTranslationDeletedBy")
+  createdBrandTranslations    BrandTranslation[]    @relation("BrandTranslationCreatedBy")
+  updatedBrandTranslations    BrandTranslation[]    @relation("BrandTranslationUpdatedBy")
+  deletedBrandTranslations    BrandTranslation[]    @relation("BrandTranslationDeletedBy")
+  createdOrders               Order[]               @relation("OrderCreatedBy")
+  updatedOrders               Order[]               @relation("OrderUpdatedBy")
+  deletedOrders               Order[]               @relation("OrderDeletedBy")
+  soldOrders                  Order[]               @relation("Shop")
+  createdUserTranslations     UserTranslation[]     @relation("UserTranslationCreatedBy")
+  updatedUserTranslations     UserTranslation[]     @relation("UserTranslationUpdatedBy")
+  deletedUserTranslations     UserTranslation[]     @relation("UserTranslationDeletedBy")
+  userTranslations            UserTranslation[]     @relation("User")
+  
+  // Self relation (User creates User)
+  createdById                 Int?
+  createdBy                   User?                 @relation("CreatorUsers", fields: [createdById], references: [id], onDelete: SetNull)
+  createdUsers                User[]                @relation("CreatorUsers")
+  updatedById                 Int?
+  updatedBy                   User?                 @relation("UpdatorUsers", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedUsers                User[]                @relation("UpdatorUsers")
+  deletedById                 Int?
+  deletedBy                   User?                 @relation("DeletorUsers", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedUsers                User[]                @relation("DeletorUsers")
+  // --- END AUDIT TRAILS ---
+
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([deletedAt])
+  @@index([email])
+}
+
+model UserAddress {
+  id            Int     @id @default(autoincrement())
+  userId        Int
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  recipientName String  @db.VarChar(255)
+  phoneNumber   String  @db.VarChar(50)
+  city          String  @db.VarChar(100) // Tỉnh/Thành phố
+  district      String  @db.VarChar(100) // Quận/Huyện
+  ward          String  @db.VarChar(100) // Phường/Xã
+  detailAddress String  @db.VarChar(500) // Số nhà, đường...
+  isDefault     Boolean @default(false)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model UserTranslation {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  user        User     @relation("User", fields: [userId], references: [id], onDelete: Cascade)
+  languageId  String
+  language    Language @relation(fields: [languageId], references: [id], onDelete: Cascade)
+  description String?  @db.Text // Bio/Giới thiệu
+
+  // Audit
+  createdById Int?
+  createdBy   User?     @relation("UserTranslationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById Int?
+  updatedBy   User?     @relation("UserTranslationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedById Int?
+  deletedBy   User?     @relation("UserTranslationDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([deletedAt])
+}
+
+model VerificationCode {
+  id        Int                  @id @default(autoincrement())
+  email     String               @db.VarChar(500)
+  code      String               @db.VarChar(50)
+  type      VerificationCodeType
+  expiresAt DateTime
+  createdAt DateTime             @default(now())
+
+  @@unique([email, type])
+  @@index([expiresAt])
+}
+
+model Device {
+  id            Int            @id @default(autoincrement())
+  userId        Int
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userAgent     String
+  ip            String
+  lastActive    DateTime       @default(now())
+  isActive      Boolean        @default(true)
+  refreshTokens RefreshToken[]
+  createdAt     DateTime       @default(now())
+}
+
+model RefreshToken {
+  token     String   @unique @db.VarChar(1000)
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId  Int
+  device    Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+// ==========================================
+// RBAC (Role Based Access Control)
+// ==========================================
+
+model Permission {
+  id          Int        @id @default(autoincrement())
+  name        String     @unique @db.VarChar(500) // Nên unique
+  description String     @default("")
+  path        String     @db.VarChar(1000)
+  method      HTTPMethod
+  module      String     @default("") @db.VarChar(500)
+  roles       Role[]
+
+  // Audit
+  createdById Int?
+  createdBy   User?     @relation("PermissionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById Int?
+  updatedBy   User?     @relation("PermissionUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedById Int?
+  deletedBy   User?     @relation("PermissionDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([deletedAt])
+}
+
+model Role {
+  id          Int          @id @default(autoincrement())
+  name        String       @unique @db.VarChar(500)
+  description String       @default("")
+  isActive    Boolean      @default(true)
+  permissions Permission[]
+  users       User[]
+
+  // Audit
+  createdById Int?
+  createdBy   User?     @relation("RoleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById Int?
+  updatedBy   User?     @relation("RoleUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedById Int?
+  deletedBy   User?     @relation("RoleDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([deletedAt])
+}
+
+// ==========================================
+// PRODUCT CATALOG
+// ==========================================
+
+model Product {
+  id                   Int                  @id @default(autoincrement())
+  publishedAt          DateTime?
+  name                 String               @db.VarChar(500) // Tên gốc (fallback)
+  slug                 String               @unique @db.VarChar(500) // Thêm slug cho SEO
+  basePrice            Float
+  virtualPrice         Float?               // Giá ảo (gạch ngang) có thể null
+  brandId              Int
+  brand                Brand                @relation(fields: [brandId], references: [id])
+  images               String[]
+  categories           Category[]
+  
+  /// [Variants]
+  variants             Json                 // Cấu hình options: Color, Size...
+  skus                 SKU[]
+  reviews              Review[]
+  productTranslations  ProductTranslation[]
+  orders               Order[]              // Order relation thông qua bảng trung gian implicit của Prisma (nếu có) nhưng ở đây bạn dùng snapshot, relation này có thể để query ngược
+  productSKUSnapshots  ProductSKUSnapshot[]
+
+  // Audit
+  createdById Int
+  createdBy   User      @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  updatedById Int?
+  updatedBy   User?     @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedById Int?
+  deletedBy   User?     @relation("ProductDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([deletedAt])
+  @@index([slug])
+}
+
+model ProductTranslation {
+  id          Int      @id @default(autoincrement())
+  productId   Int
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  languageId  String
+  language    Language @relation(fields: [languageId], references: [id], onDelete: Cascade)
+  name        String   @db.VarChar(500)
+  description String   @db.Text
+
+  // Audit
+  createdById Int?
+  createdBy   User?     @relation("ProductTranslationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById Int?
+  updatedBy   User?     @relation("ProductTranslationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedById Int?
+  deletedBy   User?     @relation("ProductTranslationDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([deletedAt])
+  @@index([productId])
+  @@unique([productId, languageId]) // Mỗi ngôn ngữ chỉ có 1 bản dịch cho 1 sp
+}
+
+model Category {
+  id                   Int                   @id @default(autoincrement())
+  products             Product[]
+  name                 String                @db.VarChar(500)
+  slug                 String                @unique @db.VarChar(500)
+  logo                 String?               @db.VarChar(1000)
+  parentCategoryId     Int?
+  parentCategory       Category?             @relation("ParentCategoryCategories", fields: [parentCategoryId], references: [id])
+  childrenCategories   Category[]            @relation("ParentCategoryCategories")
+  categoryTranslations CategoryTranslation[]
+
+  // Audit
+  createdById Int?
+  createdBy   User?     @relation("CategoryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById Int?
+  updatedBy   User?     @relation("CategoryUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedById Int?
+  deletedBy   User?     @relation("CategoryDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([deletedAt])
+}
+
+model CategoryTranslation {
+  id          Int      @id @default(autoincrement())
+  categoryId  Int
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  languageId  String
+  language    Language @relation(fields: [languageId], references: [id], onDelete: Cascade)
+  name        String   @db.VarChar(500)
+  description String?  @db.Text
+
+  // Audit
+  createdById Int?
+  createdBy   User?     @relation("CategoryTranslationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById Int?
+  updatedBy   User?     @relation("CategoryTranslationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedById Int?
+  deletedBy   User?     @relation("CategoryTranslationDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([deletedAt])
+  @@unique([categoryId, languageId])
+}
+
+model SKU {
+  id                  Int                  @id @default(autoincrement())
+  code                String               @unique @db.VarChar(100) // SKU Code (e.g., TSHIRT-RED-S)
+  name                String               @db.VarChar(500) // Tên biến thể (Red, S)
+  price               Float
+  stock               Int                  @default(0)
+  image               String?
+  productId           Int
+  product             Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  cartItems           CartItem[]
+  productSKUSnapshots ProductSKUSnapshot[]
+
+  // Audit
+  createdById Int
+  createdBy   User      @relation("SKUCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  updatedById Int?
+  updatedBy   User?     @relation("SKUUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedById Int?
+  deletedBy   User?     @relation("SKUDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([deletedAt])
+  @@index([productId])
+}
+
+model Brand {
+  id                Int                @id @default(autoincrement())
+  name              String             @db.VarChar(500)
+  slug              String             @unique @db.VarChar(500)
+  logo              String?            @db.VarChar(1000)
+  products          Product[]
+  brandTranslations BrandTranslation[]
+
+  // Audit
+  createdById Int?
+  createdBy   User?     @relation("BrandCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById Int?
+  updatedBy   User?     @relation("BrandUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedById Int?
+  deletedBy   User?     @relation("BrandDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([deletedAt])
+}
+
+model BrandTranslation {
+  id          Int      @id @default(autoincrement())
+  brandId     Int
+  brand       Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  languageId  String
+  language    Language @relation(fields: [languageId], references: [id], onDelete: Cascade)
+  name        String   @db.VarChar(500)
+  description String?  @db.Text
+
+  // Audit
+  createdById Int?
+  createdBy   User?     @relation("BrandTranslationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById Int?
+  updatedBy   User?     @relation("BrandTranslationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedById Int?
+  deletedBy   User?     @relation("BrandTranslationDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([deletedAt])
+  @@unique([brandId, languageId])
+}
+
+// ==========================================
+// ORDER & CART
+// ==========================================
+
+model CartItem {
+  id        Int      @id @default(autoincrement())
+  quantity  Int
+  skuId     Int
+  sku       SKU      @relation(fields: [skuId], references: [id], onDelete: Cascade)
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, skuId])
+  @@index([userId])
+}
+
+model ProductSKUSnapshot {
+  id                  Int      @id @default(autoincrement())
+  productName         String   @db.VarChar(500)
+  skuPrice            Float
+  image               String?
+  skuCode             String   @db.VarChar(100) // snapshot của SKU code
+  skuValue            String   @db.VarChar(500) // options snapshot (Red, S)
+  
+  // Liên kết tùy chọn (SetNull để giữ lịch sử nếu SKU/SP gốc bị xóa)
+  skuId               Int?
+  sku                 SKU?     @relation(fields: [skuId], references: [id], onDelete: SetNull)
+  productId           Int?
+  product             Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  
+  orderId             Int?
+  order               Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  quantity            Int
+  
+  /// [ProductTranslations]
+  productTranslations Json     // Snapshot bản dịch tại thời điểm mua
+
+  createdAt           DateTime @default(now())
+}
+
+model Order {
+  id          Int                  @id @default(autoincrement())
+  code        String               @unique @default(uuid()) // Mã đơn hàng hiển thị cho khách
+  userId      Int
+  user        User                 @relation(fields: [userId], references: [id])
+  status      OrderStatus
+  items       ProductSKUSnapshot[]
+  products    Product[]            // Relation gián tiếp qua bảng nối ẩn (optional)
+  reviews     Review[]
+  
+  /// [UserAddress]
+  shippingAddressSnapshot Json      // Snapshot toàn bộ thông tin địa chỉ giao hàng
+  
+  shopId      Int?
+  shop        User?                @relation("Shop", fields: [shopId], references: [id], onDelete: SetNull)
+  
+  paymentId   Int?                 // Có thể tạo Order trước khi có Payment
+  payment     Payment?             @relation(fields: [paymentId], references: [id])
+  
+  // Audit
+  createdById Int?
+  createdBy   User?                @relation("OrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById Int?
+  updatedBy   User?                @relation("OrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedById Int?
+  deletedBy   User?                @relation("OrderDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  @@index([deletedAt])
+  @@index([status, deletedAt])
+}
+
+model Payment {
+  id           Int                  @id @default(autoincrement())
+  orders       Order[]
+  transactions PaymentTransaction[]
+  
+  method       String               @db.VarChar(50) // 'COD', 'BANK_TRANSFER', 'VNPAY'
+  amount       Float
+  status       PaymentStatus
+  
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+}
+
+model PaymentTransaction {
+  id                 Int      @id @default(autoincrement())
+  paymentId          Int
+  payment            Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  
+  gateway            String   @db.VarChar(100)
+  transactionDate    DateTime @default(now())
+  accountNumber      String?  @db.VarChar(100)
+  subAccount         String?  @db.VarChar(250)
+  amountIn           Int      @default(0)
+  amountOut          Int      @default(0)
+  accumulated        Int      @default(0)
+  code               String?  @db.VarChar(250)
+  transactionContent String?  @db.Text
+  referenceNumber    String?  @db.VarChar(255)
+  body               String?  @db.Text
+  
+  status             PaymentStatus // Trạng thái của từng lần giao dịch (lần 1 fail, lần 2 success)
+
+  createdAt          DateTime @default(now())
+}
+
+// ==========================================
+// COMMUNICATION & FEEDBACK
+// ==========================================
+
+model Websocket {
+  id        String   @id
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model Review {
+  id          Int           @id @default(autoincrement())
+  content     String        @db.Text
+  rating      Int           // 1-5
+  orderId     Int
+  order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId   Int
+  product     Product       @relation(fields: [productId], references: [id])
+  userId      Int
+  user        User          @relation(fields: [userId], references: [id])
+  medias      ReviewMedia[]
+  updateCount Int           @default(0)
+  
+  // Reply from shop (optional extension)
+  reply       String?       @db.Text
+  repliedAt   DateTime?
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([orderId, productId])
+  @@index([userId])
+  @@index([productId])
+}
+
+model ReviewMedia {
+  id        Int       @id @default(autoincrement())
+  url       String    @db.VarChar(1000)
+  type      MediaType
+  reviewId  Int
+  review    Review    @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+}
+
+// Group chat logic
+model Conversation {
+  id            Int       @id @default(autoincrement())
+  starterId     Int
+  starter       User      @relation("ConversationStarter", fields: [starterId], references: [id])
+  partnerId     Int
+  partner       User      @relation("ConversationPartner", fields: [partnerId], references: [id])
+  messages      Message[]
+  
+  lastMessage   String?   @db.Text
+  lastMessageAt DateTime?
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([starterId, partnerId]) // Mỗi cặp user chỉ có 1 conversation
+}
+
+model Message {
+  id             Int          @id @default(autoincrement())
+  conversationId Int
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  
+  fromUserId     Int
+  fromUser       User         @relation("FromUser", fields: [fromUserId], references: [id])
+  
+  content        String       @db.Text
+  isRead         Boolean      @default(false)
+  readAt         DateTime?
+  
+  createdAt      DateTime     @default(now())
+  
+  @@index([conversationId])
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PENDING_CONFIRMATION // Chờ shop xác nhận
+  PENDING_PICKUP       // Chờ đơn vị vận chuyển lấy hàng
+  PENDING_DELIVERY     // Đang giao
+  DELIVERED
+  RETURN_REQUESTED     // Yêu cầu trả hàng
+  RETURNED
+  CANCELLED
+}
+
+enum VerificationCodeType {
+  REGISTER
+  FORGOT_PASSWORD
+  LOGIN
+  DISABLE_2FA
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+}
+
+enum HTTPMethod {
+  GET
+  POST
+  PUT
+  DELETE
+  PATCH
+  OPTIONS
+  HEAD
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+}
