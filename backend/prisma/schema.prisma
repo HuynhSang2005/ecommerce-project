@@ -1,17 +1,15 @@
 generator client {
-  provider        = "prisma-client"
+  provider        = "prisma-client-js"
   output          = "../src/generated/prisma"
-  moduleFormat    = "cjs"
-  // previewFeatures = ["fullTextSearch", "postgresqlExtensions"] //  thêm fullTextSearch nếu cần tìm kiếm sản phẩm
+  previewFeatures = ["fullTextSearchPostgres", "postgresqlExtensions"]
 }
 
-generator json {
-  provider = "prisma-json-types-generator"
-}
+// Nếu bạn muốn dùng JSON types mạnh mẽ (cần cài package: prisma-json-types-generator)
+// Nếu không, có thể xóa block này
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  extensions = [pg_trgm, unaccent] // Cần thiết cho tìm kiếm full-text
 }
 
 // ==========================================
@@ -49,7 +47,7 @@ model User {
   email       String     @unique
   name        String     @db.VarChar(500)
   password    String     @db.VarChar(500)
-  phoneNumber String?    @db.VarChar(50) // Phone có thể null nếu đăng ký bằng email
+  phoneNumber String?    @db.VarChar(50)
   avatar      String?    @db.VarChar(1000)
   totpSecret  String?    @db.VarChar(1000)
   status      UserStatus @default(INACTIVE)
@@ -68,12 +66,11 @@ model User {
   
   // Chat System
   sentMessages         Message[]             @relation("FromUser")
-  // receivedMessages  Message[]             @relation("ToUser") // Đã chuyển sang logic Conversation
   conversationsStarted Conversation[]        @relation("ConversationStarter")
   conversationsPartner Conversation[]        @relation("ConversationPartner")
   webSockets           Websocket[]
 
-  // --- START AUDIT TRAILS (Hệ thống log ai làm gì) ---
+  // --- START AUDIT TRAILS ---
   createdPermissions          Permission[]          @relation("PermissionCreatedBy")
   updatedPermissions          Permission[]          @relation("PermissionUpdatedBy")
   deletedPermissions          Permission[]          @relation("PermissionDeletedBy")
@@ -113,7 +110,7 @@ model User {
   deletedUserTranslations     UserTranslation[]     @relation("UserTranslationDeletedBy")
   userTranslations            UserTranslation[]     @relation("User")
   
-  // Self relation (User creates User)
+  // Self relation
   createdById                 Int?
   createdBy                   User?                 @relation("CreatorUsers", fields: [createdById], references: [id], onDelete: SetNull)
   createdUsers                User[]                @relation("CreatorUsers")
@@ -140,10 +137,10 @@ model UserAddress {
   
   recipientName String  @db.VarChar(255)
   phoneNumber   String  @db.VarChar(50)
-  city          String  @db.VarChar(100) // Tỉnh/Thành phố
-  district      String  @db.VarChar(100) // Quận/Huyện
-  ward          String  @db.VarChar(100) // Phường/Xã
-  detailAddress String  @db.VarChar(500) // Số nhà, đường...
+  city          String  @db.VarChar(100)
+  district      String  @db.VarChar(100)
+  ward          String  @db.VarChar(100)
+  detailAddress String  @db.VarChar(500)
   isDefault     Boolean @default(false)
 
   createdAt     DateTime @default(now())
@@ -158,7 +155,7 @@ model UserTranslation {
   user        User     @relation("User", fields: [userId], references: [id], onDelete: Cascade)
   languageId  String
   language    Language @relation(fields: [languageId], references: [id], onDelete: Cascade)
-  description String?  @db.Text // Bio/Giới thiệu
+  description String?  @db.Text
 
   // Audit
   createdById Int?
@@ -211,12 +208,12 @@ model RefreshToken {
 }
 
 // ==========================================
-// RBAC (Role Based Access Control)
+// RBAC
 // ==========================================
 
 model Permission {
   id          Int        @id @default(autoincrement())
-  name        String     @unique @db.VarChar(500) // Nên unique
+  name        String     @unique @db.VarChar(500)
   description String     @default("")
   path        String     @db.VarChar(1000)
   method      HTTPMethod
@@ -266,21 +263,19 @@ model Role {
 model Product {
   id                   Int                  @id @default(autoincrement())
   publishedAt          DateTime?
-  name                 String               @db.VarChar(500) // Tên gốc (fallback)
-  slug                 String               @unique @db.VarChar(500) // Thêm slug cho SEO
+  name                 String               @db.VarChar(500)
+  slug                 String               @unique @db.VarChar(500)
   basePrice            Float
-  virtualPrice         Float?               // Giá ảo (gạch ngang) có thể null
+  virtualPrice         Float?
   brandId              Int
   brand                Brand                @relation(fields: [brandId], references: [id])
   images               String[]
   categories           Category[]
-  
-  /// [Variants]
-  variants             Json                 // Cấu hình options: Color, Size...
+  variants             Json
   skus                 SKU[]
   reviews              Review[]
   productTranslations  ProductTranslation[]
-  orders               Order[]              // Order relation thông qua bảng trung gian implicit của Prisma (nếu có) nhưng ở đây bạn dùng snapshot, relation này có thể để query ngược
+  orders               Order[]
   productSKUSnapshots  ProductSKUSnapshot[]
 
   // Audit
@@ -320,7 +315,7 @@ model ProductTranslation {
 
   @@index([deletedAt])
   @@index([productId])
-  @@unique([productId, languageId]) // Mỗi ngôn ngữ chỉ có 1 bản dịch cho 1 sp
+  @@unique([productId, languageId])
 }
 
 model Category {
@@ -374,8 +369,8 @@ model CategoryTranslation {
 
 model SKU {
   id                  Int                  @id @default(autoincrement())
-  code                String               @unique @db.VarChar(100) // SKU Code (e.g., TSHIRT-RED-S)
-  name                String               @db.VarChar(500) // Tên biến thể (Red, S)
+  code                String               @unique @db.VarChar(100)
+  name                String               @db.VarChar(500)
   price               Float
   stock               Int                  @default(0)
   image               String?
@@ -468,10 +463,9 @@ model ProductSKUSnapshot {
   productName         String   @db.VarChar(500)
   skuPrice            Float
   image               String?
-  skuCode             String   @db.VarChar(100) // snapshot của SKU code
-  skuValue            String   @db.VarChar(500) // options snapshot (Red, S)
+  skuCode             String   @db.VarChar(100)
+  skuValue            String   @db.VarChar(500)
   
-  // Liên kết tùy chọn (SetNull để giữ lịch sử nếu SKU/SP gốc bị xóa)
   skuId               Int?
   sku                 SKU?     @relation(fields: [skuId], references: [id], onDelete: SetNull)
   productId           Int?
@@ -481,30 +475,27 @@ model ProductSKUSnapshot {
   order               Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
 
   quantity            Int
-  
-  /// [ProductTranslations]
-  productTranslations Json     // Snapshot bản dịch tại thời điểm mua
+  productTranslations Json
 
   createdAt           DateTime @default(now())
 }
 
 model Order {
   id          Int                  @id @default(autoincrement())
-  code        String               @unique @default(uuid()) // Mã đơn hàng hiển thị cho khách
+  code        String               @unique @default(uuid())
   userId      Int
   user        User                 @relation(fields: [userId], references: [id])
   status      OrderStatus
   items       ProductSKUSnapshot[]
-  products    Product[]            // Relation gián tiếp qua bảng nối ẩn (optional)
+  products    Product[]
   reviews     Review[]
   
-  /// [UserAddress]
-  shippingAddressSnapshot Json      // Snapshot toàn bộ thông tin địa chỉ giao hàng
+  shippingAddressSnapshot Json
   
   shopId      Int?
   shop        User?                @relation("Shop", fields: [shopId], references: [id], onDelete: SetNull)
   
-  paymentId   Int?                 // Có thể tạo Order trước khi có Payment
+  paymentId   Int?
   payment     Payment?             @relation(fields: [paymentId], references: [id])
   
   // Audit
@@ -527,7 +518,7 @@ model Payment {
   orders       Order[]
   transactions PaymentTransaction[]
   
-  method       String               @db.VarChar(50) // 'COD', 'BANK_TRANSFER', 'VNPAY'
+  method       String               @db.VarChar(50)
   amount       Float
   status       PaymentStatus
   
@@ -552,7 +543,7 @@ model PaymentTransaction {
   referenceNumber    String?  @db.VarChar(255)
   body               String?  @db.Text
   
-  status             PaymentStatus // Trạng thái của từng lần giao dịch (lần 1 fail, lần 2 success)
+  status             PaymentStatus
 
   createdAt          DateTime @default(now())
 }
@@ -571,7 +562,7 @@ model Websocket {
 model Review {
   id          Int           @id @default(autoincrement())
   content     String        @db.Text
-  rating      Int           // 1-5
+  rating      Int
   orderId     Int
   order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
   productId   Int
@@ -581,7 +572,6 @@ model Review {
   medias      ReviewMedia[]
   updateCount Int           @default(0)
   
-  // Reply from shop (optional extension)
   reply       String?       @db.Text
   repliedAt   DateTime?
 
@@ -602,7 +592,6 @@ model ReviewMedia {
   createdAt DateTime  @default(now())
 }
 
-// Group chat logic
 model Conversation {
   id            Int       @id @default(autoincrement())
   starterId     Int
@@ -617,7 +606,7 @@ model Conversation {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  @@unique([starterId, partnerId]) // Mỗi cặp user chỉ có 1 conversation
+  @@unique([starterId, partnerId])
 }
 
 model Message {
@@ -650,11 +639,11 @@ enum PaymentStatus {
 
 enum OrderStatus {
   PENDING_PAYMENT
-  PENDING_CONFIRMATION // Chờ shop xác nhận
-  PENDING_PICKUP       // Chờ đơn vị vận chuyển lấy hàng
-  PENDING_DELIVERY     // Đang giao
+  PENDING_CONFIRMATION
+  PENDING_PICKUP
+  PENDING_DELIVERY
   DELIVERED
-  RETURN_REQUESTED     // Yêu cầu trả hàng
+  RETURN_REQUESTED
   RETURNED
   CANCELLED
 }
