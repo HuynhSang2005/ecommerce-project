@@ -1,76 +1,92 @@
 generator client {
-  provider        = "prisma-client-js"
+  provider        = "prisma-client"
   output          = "../src/generated/prisma"
   previewFeatures = ["fullTextSearchPostgres", "postgresqlExtensions"]
+  module = "cjs"
 }
-
-// Nếu bạn muốn dùng JSON types mạnh mẽ (cần cài package: prisma-json-types-generator)
-// Nếu không, có thể xóa block này
 
 datasource db {
-  provider = "postgresql"
-  extensions = [pg_trgm, unaccent] // Cần thiết cho tìm kiếm full-text
+  provider   = "postgresql"
+  extensions = [pg_trgm, unaccent] // pg_trgm: Hỗ trợ tìm kiếm gần đúng (fuzzy search). unaccent: Tìm kiếm tiếng Việt không dấu.
 }
 
-// ==========================================
-// CORE SYSTEM & LOCALIZATION
-// ==========================================
+// ============================================================================
+// 1. CORE SYSTEM & LOCALIZATION
+// ============================================================================
 
+// Table lưu danh sách ngôn ngữ hỗ trợ (VD: 'vi', 'en').
+// Là table cha của tất cả các table 'Translation'.
 model Language {
-  id                   String                @id @db.VarChar(10) // 'en', 'vi'
-  name                 String                @db.VarChar(500)
-  userTranslations     UserTranslation[]
-  productTranslations  ProductTranslation[]
+  id                  String               @id @db.VarChar(10) // Mã ISO: 'en', 'vi'
+  name                String               @db.VarChar(500)    // Tên hiển thị: 'Tiếng Việt', 'English'
+  
+  // Các relation ngược để truy vấn bản dịch
+  userTranslations    UserTranslation[]
+  productTranslations ProductTranslation[]
   categoryTranslations CategoryTranslation[]
-  brandTranslations    BrandTranslation[]
+  brandTranslations   BrandTranslation[]
 
-  // Audit
+  // --- AUDIT TRAIL (Lịch sử thao tác) ---
+  // Pattern này lặp lại ở hầu hết các table để tracking: Ai tạo? Ai sửa? Ai xóa?
   createdById Int?
-  createdBy   User?     @relation("LanguageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User?    @relation("LanguageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedById Int?
-  updatedBy   User?     @relation("LanguageUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   User?    @relation("LanguageUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   deletedById Int?
-  deletedBy   User?     @relation("LanguageDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
-  deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  deletedBy   User?    @relation("LanguageDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime? // Soft Delete: Nếu trường này có giá trị => record đã bị xóa mềm
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  @@index([deletedAt])
+  @@index([deletedAt]) // Index giúp query lọc record đã xóa nhanh hơn
 }
 
-// ==========================================
-// USER & AUTHENTICATION
-// ==========================================
+// ============================================================================
+// 2. USER & AUTHENTICATION (NGƯỜI DÙNG, BẢO MẬT & VAI TRÒ MARKETPLACE)
+// ============================================================================
 
 model User {
-  id          Int        @id @default(autoincrement())
-  email       String     @unique
-  name        String     @db.VarChar(500)
-  password    String     @db.VarChar(500)
-  phoneNumber String?    @db.VarChar(50)
-  avatar      String?    @db.VarChar(1000)
-  totpSecret  String?    @db.VarChar(1000)
-  status      UserStatus @default(INACTIVE)
+  id           Int        @id @default(autoincrement())
+  email        String     @unique
+  name         String     @db.VarChar(500)
+  password     String?    @db.VarChar(500) // Có thể null nếu user login bằng Google/Facebook
+  phoneNumber  String?    @db.VarChar(50)
+  avatar       String?    @db.VarChar(1000) // URL ảnh lưu trên S3
+  
+  // --- BẢO MẬT & 2FA ---
+  totpSecret      String?    @db.VarChar(1000) // Secret key cho Google Authenticator
+  isTwoFactorEnabled Boolean @default(false)   // Cờ bật/tắt 2FA
+  
+  // --- OAUTH 2.0 ---
+  googleId        String?    @unique // ID trả về từ Google login
 
-  // RBAC
+  status       UserStatus @default(INACTIVE) // Mặc định chưa kích hoạt email
+
+  // --- PHÂN QUYỀN (RBAC) ---
   roleId Int
   role   Role @relation(fields: [roleId], references: [id])
 
-  // Relations
-  addresses            UserAddress[]
-  devices              Device[]
-  refreshTokens        RefreshToken[]
-  carts                CartItem[]
-  orders               Order[]
-  reviews              Review[]
+  // --- QUAN HỆ CƠ BẢN ---
+  addresses       UserAddress[]
+  devices         Device[]       // Quản lý thiết bị đăng nhập
+  refreshTokens   RefreshToken[] // Quản lý session JWT
+  carts           CartItem[]     // Giỏ hàng cá nhân
   
-  // Chat System
-  sentMessages         Message[]             @relation("FromUser")
-  conversationsStarted Conversation[]        @relation("ConversationStarter")
-  conversationsPartner Conversation[]        @relation("ConversationPartner")
-  webSockets           Websocket[]
+  // --- QUAN HỆ MARKETPLACE (QUAN TRỌNG) ---
+  // User đóng vai người mua: Danh sách đơn mình đã đặt
+  myOrders        Order[]     @relation("MyOrders")   
+  
+  // User đóng vai người bán (Shop): Danh sách đơn khách đặt mua của mình
+  shopOrders      Order[]     @relation("ShopOrders") 
+  
+  // Hệ thống Review & Chat
+  reviews         Review[]
+  sentMessages          Message[]            @relation("FromUser")
+  conversationsStarted  Conversation[]       @relation("ConversationStarter")
+  conversationsPartner  Conversation[]       @relation("ConversationPartner")
 
-  // --- START AUDIT TRAILS ---
+  // --- AUDIT LOG RELATIONS (Dùng để truy vết user này đã thao tác gì trên hệ thống) ---
+  // (Giữ nguyên logic cũ của bạn - Rất tốt cho hệ thống lớn)
   createdPermissions          Permission[]          @relation("PermissionCreatedBy")
   updatedPermissions          Permission[]          @relation("PermissionUpdatedBy")
   deletedPermissions          Permission[]          @relation("PermissionDeletedBy")
@@ -104,13 +120,12 @@ model User {
   createdOrders               Order[]               @relation("OrderCreatedBy")
   updatedOrders               Order[]               @relation("OrderUpdatedBy")
   deletedOrders               Order[]               @relation("OrderDeletedBy")
-  soldOrders                  Order[]               @relation("Shop")
   createdUserTranslations     UserTranslation[]     @relation("UserTranslationCreatedBy")
   updatedUserTranslations     UserTranslation[]     @relation("UserTranslationUpdatedBy")
   deletedUserTranslations     UserTranslation[]     @relation("UserTranslationDeletedBy")
   userTranslations            UserTranslation[]     @relation("User")
   
-  // Self relation
+  // Tự tham chiếu (Self-referencing) cho Audit user
   createdById                 Int?
   createdBy                   User?                 @relation("CreatorUsers", fields: [createdById], references: [id], onDelete: SetNull)
   createdUsers                User[]                @relation("CreatorUsers")
@@ -120,7 +135,6 @@ model User {
   deletedById                 Int?
   deletedBy                   User?                 @relation("DeletorUsers", fields: [deletedById], references: [id], onDelete: SetNull)
   deletedUsers                User[]                @relation("DeletorUsers")
-  // --- END AUDIT TRAILS ---
 
   deletedAt DateTime?
   createdAt DateTime  @default(now())
@@ -130,18 +144,27 @@ model User {
   @@index([email])
 }
 
+// Lưu danh sách địa chỉ giao hàng của User
 model UserAddress {
   id            Int     @id @default(autoincrement())
   userId        Int
   user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   
-  recipientName String  @db.VarChar(255)
-  phoneNumber   String  @db.VarChar(50)
-  city          String  @db.VarChar(100)
-  district      String  @db.VarChar(100)
-  ward          String  @db.VarChar(100)
-  detailAddress String  @db.VarChar(500)
-  isDefault     Boolean @default(false)
+  recipientName String  @db.VarChar(255) // Tên người nhận
+  phoneNumber   String  @db.VarChar(50)  // SĐT người nhận
+  
+  // --- THÔNG TIN GHN (GIAO HÀNG NHANH) ---
+  // Cần lưu chính xác ID địa chính của GHN để tính phí ship chuẩn
+  provinceId    Int?    // ID Tỉnh/TP (GHN)
+  districtId    Int?    // ID Quận/Huyện (GHN)
+  wardCode      String? // Mã Phường/Xã (GHN)
+  
+  city          String  @db.VarChar(100) // Tên hiển thị Tỉnh/TP
+  district      String  @db.VarChar(100) // Tên hiển thị Quận/Huyện
+  ward          String  @db.VarChar(100) // Tên hiển thị Phường/Xã
+  detailAddress String  @db.VarChar(500) // Số nhà, tên đường...
+  
+  isDefault     Boolean @default(false) // Địa chỉ mặc định
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -149,6 +172,7 @@ model UserAddress {
   @@index([userId])
 }
 
+// Lưu mô tả hồ sơ User đa ngôn ngữ (VD: Giới thiệu Shop tiếng Anh/Việt)
 model UserTranslation {
   id          Int      @id @default(autoincrement())
   userId      Int
@@ -159,42 +183,45 @@ model UserTranslation {
 
   // Audit
   createdById Int?
-  createdBy   User?     @relation("UserTranslationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User?    @relation("UserTranslationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedById Int?
-  updatedBy   User?     @relation("UserTranslationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   User?    @relation("UserTranslationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   deletedById Int?
-  deletedBy   User?     @relation("UserTranslationDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedBy   User?    @relation("UserTranslationDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([deletedAt])
 }
 
+// Lưu mã OTP (Register, Reset Password...)
 model VerificationCode {
   id        Int                  @id @default(autoincrement())
   email     String               @db.VarChar(500)
   code      String               @db.VarChar(50)
-  type      VerificationCodeType
-  expiresAt DateTime
+  type      VerificationCodeType // Loại OTP
+  expiresAt DateTime             // Thời gian hết hạn
   createdAt DateTime             @default(now())
 
-  @@unique([email, type])
+  @@unique([email, type]) // 1 Email chỉ có 1 mã OTP active cho 1 loại hành động
   @@index([expiresAt])
 }
 
+// Quản lý thiết bị đăng nhập (Security)
 model Device {
-  id            Int            @id @default(autoincrement())
+  id            Int      @id @default(autoincrement())
   userId        Int
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userAgent     String
-  ip            String
-  lastActive    DateTime       @default(now())
-  isActive      Boolean        @default(true)
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userAgent     String   // Thông tin trình duyệt/OS
+  ip            String   // Địa chỉ IP
+  lastActive    DateTime @default(now())
+  isActive      Boolean  @default(true) // Có thể force logout thiết bị bằng cách set false
   refreshTokens RefreshToken[]
-  createdAt     DateTime       @default(now())
+  createdAt     DateTime @default(now())
 }
 
+// Token dùng để lấy AccessToken mới (JWT)
 model RefreshToken {
   token     String   @unique @db.VarChar(1000)
   userId    Int
@@ -207,92 +234,110 @@ model RefreshToken {
   @@index([expiresAt])
 }
 
-// ==========================================
-// RBAC
-// ==========================================
+// ============================================================================
+// 3. RBAC (ROLE BASED ACCESS CONTROL - PHÂN QUYỀN)
+// ============================================================================
 
+// Định nghĩa 1 quyền cụ thể (VD: product:create, order:view)
 model Permission {
   id          Int        @id @default(autoincrement())
-  name        String     @unique @db.VarChar(500)
+  name        String     @unique @db.VarChar(500) // product:create
   description String     @default("")
-  path        String     @db.VarChar(1000)
-  method      HTTPMethod
-  module      String     @default("") @db.VarChar(500)
+  path        String     @db.VarChar(1000)        // /api/v1/products
+  method      HTTPMethod                          // POST
+  module      String     @default("") @db.VarChar(500) // PRODUCT
   roles       Role[]
 
   // Audit
   createdById Int?
-  createdBy   User?     @relation("PermissionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User?    @relation("PermissionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedById Int?
-  updatedBy   User?     @relation("PermissionUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   User?    @relation("PermissionUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   deletedById Int?
-  deletedBy   User?     @relation("PermissionDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedBy   User?    @relation("PermissionDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([deletedAt])
 }
 
+// Nhóm quyền (VD: ADMIN, SELLER, CUSTOMER)
 model Role {
   id          Int          @id @default(autoincrement())
   name        String       @unique @db.VarChar(500)
   description String       @default("")
   isActive    Boolean      @default(true)
-  permissions Permission[]
+  permissions Permission[] // Quan hệ nhiều-nhiều: 1 Role có nhiều Perms
   users       User[]
 
   // Audit
   createdById Int?
-  createdBy   User?     @relation("RoleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User?    @relation("RoleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedById Int?
-  updatedBy   User?     @relation("RoleUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   User?    @relation("RoleUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   deletedById Int?
-  deletedBy   User?     @relation("RoleDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedBy   User?    @relation("RoleDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([deletedAt])
 }
 
-// ==========================================
-// PRODUCT CATALOG
-// ==========================================
+// ============================================================================
+// 4. PRODUCT CATALOG (DANH MỤC SẢN PHẨM)
+// ============================================================================
 
 model Product {
-  id                   Int                  @id @default(autoincrement())
-  publishedAt          DateTime?
-  name                 String               @db.VarChar(500)
-  slug                 String               @unique @db.VarChar(500)
-  basePrice            Float
-  virtualPrice         Float?
-  brandId              Int
-  brand                Brand                @relation(fields: [brandId], references: [id])
-  images               String[]
-  categories           Category[]
-  variants             Json
-  skus                 SKU[]
-  reviews              Review[]
-  productTranslations  ProductTranslation[]
-  orders               Order[]
-  productSKUSnapshots  ProductSKUSnapshot[]
+  id          Int      @id @default(autoincrement())
+  
+  // --- MARKETPLACE LOGIC ---
+  // Sản phẩm này thuộc về Shop nào? 
+  // Rất quan trọng để chia đơn hàng và tính doanh thu.
+  shopId      Int      
+  
+  publishedAt DateTime? // Ngày đăng bán. Nếu null => Chưa bán
+  name        String   @db.VarChar(500)
+  slug        String   @unique @db.VarChar(500) // URL SEO friendly
+  basePrice   Float    // Giá hiển thị cơ bản
+  virtualPrice Float?  // Giá ảo (gạch ngang) để làm marketing
+  brandId     Int
+  brand       Brand    @relation(fields: [brandId], references: [id])
+  images      String[] // Mảng URL ảnh S3
+  categories  Category[]
+  variants    Json     // Cấu trúc biến thể (Màu, Size) dạng JSON để linh hoạt hiển thị UI
+  
+  // --- Giao Hàng Nhanh LOGIC (SHIPPING) ---
+  // Kích thước vật lý sau đóng gói. BẮT BUỘC để tính phí ship qua API GHN.
+  weight      Int       @default(0) // gram
+  height      Int       @default(0) // cm
+  length      Int       @default(0) // cm
+  width       Int       @default(0) // cm
+
+  skus        SKU[]
+  reviews     Review[]
+  productTranslations ProductTranslation[]
+  orders      Order[]
+  productSKUSnapshots ProductSKUSnapshot[]
 
   // Audit
   createdById Int
-  createdBy   User      @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  createdBy   User     @relation("ProductCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
   updatedById Int?
-  updatedBy   User?     @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   User?    @relation("ProductUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   deletedById Int?
-  deletedBy   User?     @relation("ProductDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedBy   User?    @relation("ProductDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([deletedAt])
   @@index([slug])
+  @@index([shopId])
 }
 
+// Dịch tên/mô tả sản phẩm sang nhiều ngôn ngữ
 model ProductTranslation {
   id          Int      @id @default(autoincrement())
   productId   Int
@@ -304,14 +349,14 @@ model ProductTranslation {
 
   // Audit
   createdById Int?
-  createdBy   User?     @relation("ProductTranslationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User?    @relation("ProductTranslationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedById Int?
-  updatedBy   User?     @relation("ProductTranslationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   User?    @relation("ProductTranslationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   deletedById Int?
-  deletedBy   User?     @relation("ProductTranslationDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedBy   User?    @relation("ProductTranslationDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([deletedAt])
   @@index([productId])
@@ -319,26 +364,29 @@ model ProductTranslation {
 }
 
 model Category {
-  id                   Int                   @id @default(autoincrement())
-  products             Product[]
-  name                 String                @db.VarChar(500)
-  slug                 String                @unique @db.VarChar(500)
-  logo                 String?               @db.VarChar(1000)
-  parentCategoryId     Int?
-  parentCategory       Category?             @relation("ParentCategoryCategories", fields: [parentCategoryId], references: [id])
-  childrenCategories   Category[]            @relation("ParentCategoryCategories")
+  id          Int        @id @default(autoincrement())
+  products    Product[]
+  name        String     @db.VarChar(500)
+  slug        String     @unique @db.VarChar(500)
+  logo        String?    @db.VarChar(1000)
+  
+  // Danh mục cha-con (VD: Điện tử -> Điện thoại -> iPhone)
+  parentCategoryId Int?
+  parentCategory   Category? @relation("ParentCategoryCategories", fields: [parentCategoryId], references: [id])
+  childrenCategories Category[] @relation("ParentCategoryCategories")
+  
   categoryTranslations CategoryTranslation[]
 
   // Audit
   createdById Int?
-  createdBy   User?     @relation("CategoryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User?    @relation("CategoryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedById Int?
-  updatedBy   User?     @relation("CategoryUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   User?    @relation("CategoryUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   deletedById Int?
-  deletedBy   User?     @relation("CategoryDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedBy   User?    @relation("CategoryDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([deletedAt])
 }
@@ -354,64 +402,73 @@ model CategoryTranslation {
 
   // Audit
   createdById Int?
-  createdBy   User?     @relation("CategoryTranslationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User?    @relation("CategoryTranslationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedById Int?
-  updatedBy   User?     @relation("CategoryTranslationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   User?    @relation("CategoryTranslationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   deletedById Int?
-  deletedBy   User?     @relation("CategoryTranslationDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedBy   User?    @relation("CategoryTranslationDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([deletedAt])
   @@unique([categoryId, languageId])
 }
 
+// SKU (Stock Keeping Unit): Đơn vị lưu kho.
+// Ví dụ: Áo thun (Product) -> SKU 1: Đỏ/L, SKU 2: Đỏ/M
 model SKU {
-  id                  Int                  @id @default(autoincrement())
-  code                String               @unique @db.VarChar(100)
-  name                String               @db.VarChar(500)
-  price               Float
-  stock               Int                  @default(0)
-  image               String?
-  productId           Int
-  product             Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
-  cartItems           CartItem[]
+  id          Int      @id @default(autoincrement())
+  code        String   @unique @db.VarChar(100) // Mã quản lý nội bộ shop
+  name        String   @db.VarChar(500)         // Tên variant: "Màu Đỏ - Size L"
+  price       Float    // Giá bán thực tế của biến thể này
+  stock       Int      @default(0) // Số lượng tồn kho
+  image       String?  // Ảnh riêng cho biến thể này (nếu có)
+  
+  // --- CONCURRENCY CONTROL (XỬ LÝ ĐỒNG THỜI) ---
+  // Kỹ thuật Optimistic Locking: Khi update stock, sẽ check version.
+  // Nếu version DB khác version lúc đọc -> Có người khác vừa mua xong -> Rollback để tránh âm kho.
+  version     Int      @default(1)
+
+  productId   Int
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  cartItems   CartItem[]
   productSKUSnapshots ProductSKUSnapshot[]
 
   // Audit
   createdById Int
-  createdBy   User      @relation("SKUCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  createdBy   User     @relation("SKUCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
   updatedById Int?
-  updatedBy   User?     @relation("SKUUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   User?    @relation("SKUUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   deletedById Int?
-  deletedBy   User?     @relation("SKUDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedBy   User?    @relation("SKUDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([deletedAt])
   @@index([productId])
 }
 
 model Brand {
-  id                Int                @id @default(autoincrement())
-  name              String             @db.VarChar(500)
-  slug              String             @unique @db.VarChar(500)
-  logo              String?            @db.VarChar(1000)
-  products          Product[]
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(500)
+  slug        String   @unique @db.VarChar(500)
+  logo        String?  @db.VarChar(1000)
+  products    Product[]
   brandTranslations BrandTranslation[]
 
   // Audit
   createdById Int?
-  createdBy   User?     @relation("BrandCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User?    @relation("BrandCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedById Int?
-  updatedBy   User?     @relation("BrandUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   User?    @relation("BrandUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   deletedById Int?
-  deletedBy   User?     @relation("BrandDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedBy   User?    @relation("BrandDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([deletedAt])
 }
@@ -427,23 +484,24 @@ model BrandTranslation {
 
   // Audit
   createdById Int?
-  createdBy   User?     @relation("BrandTranslationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User?    @relation("BrandTranslationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedById Int?
-  updatedBy   User?     @relation("BrandTranslationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedBy   User?    @relation("BrandTranslationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   deletedById Int?
-  deletedBy   User?     @relation("BrandTranslationDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedBy   User?    @relation("BrandTranslationDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
   deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([deletedAt])
   @@unique([brandId, languageId])
 }
 
-// ==========================================
-// ORDER & CART
-// ==========================================
+// ============================================================================
+// 5. ORDER & CART (GIỎ HÀNG & ĐƠN HÀNG - XỬ LÝ TÁCH ĐƠN)
+// ============================================================================
 
+// Giỏ hàng tạm thời
 model CartItem {
   id        Int      @id @default(autoincrement())
   quantity  Int
@@ -454,159 +512,197 @@ model CartItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([userId, skuId])
+  @@unique([userId, skuId]) // Mỗi user chỉ có 1 dòng cho 1 SKU trong giỏ
   @@index([userId])
 }
 
+// Snapshot (Bản sao) chi tiết sản phẩm trong đơn hàng.
+// Tại sao không trỏ trực tiếp đến table SKU?
+// -> Vì nếu Shop sửa giá/tên sản phẩm sau khi khách mua, đơn hàng cũ KHÔNG được phép thay đổi.
 model ProductSKUSnapshot {
-  id                  Int      @id @default(autoincrement())
-  productName         String   @db.VarChar(500)
-  skuPrice            Float
-  image               String?
-  skuCode             String   @db.VarChar(100)
-  skuValue            String   @db.VarChar(500)
+  id          Int      @id @default(autoincrement())
+  // Dữ liệu sao chép từ SKU/Product tại thời điểm đặt hàng
+  productName String   @db.VarChar(500)
+  skuPrice    Float
+  image       String?
+  skuCode     String   @db.VarChar(100)
+  skuValue    String   @db.VarChar(500) // VD: "Màu Đỏ, Size L"
+  quantity    Int
   
-  skuId               Int?
-  sku                 SKU?     @relation(fields: [skuId], references: [id], onDelete: SetNull)
-  productId           Int?
-  product             Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  // --- HANDMADE FEATURE ---
+  // Lưu yêu cầu tùy chỉnh của khách (VD: Khắc tên, gói quà...)
+  customization Json?  // VD: {"engraveName": "Minh", "note": "Gói quà màu hồng"}
   
-  orderId             Int?
-  order               Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  // Relation lỏng (SetNull) để giữ lịch sử nếu sản phẩm gốc bị xóa
+  skuId       Int?
+  sku         SKU?     @relation(fields: [skuId], references: [id], onDelete: SetNull)
+  productId   Int?
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  
+  orderId     Int?
+  order       Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
 
-  quantity            Int
-  productTranslations Json
+  productTranslations Json // Lưu luôn bản dịch tại thời điểm mua
 
-  createdAt           DateTime @default(now())
+  createdAt   DateTime @default(now())
 }
 
 model Order {
-  id          Int                  @id @default(autoincrement())
-  code        String               @unique @default(uuid())
-  userId      Int
-  user        User                 @relation(fields: [userId], references: [id])
-  status      OrderStatus
-  items       ProductSKUSnapshot[]
-  products    Product[]
-  reviews     Review[]
+  id            Int      @id @default(autoincrement())
+  code          String   @unique @default(uuid()) // Mã đơn hiển thị cho khách (#ORD-123)
   
-  shippingAddressSnapshot Json
+  userId        Int
+  user          User     @relation("MyOrders", fields: [userId], references: [id])
   
-  shopId      Int?
-  shop        User?                @relation("Shop", fields: [shopId], references: [id], onDelete: SetNull)
+  status        OrderStatus @default(PENDING_PAYMENT)
   
-  paymentId   Int?
-  payment     Payment?             @relation(fields: [paymentId], references: [id])
+  items         ProductSKUSnapshot[]
+  products      Product[] // Relation ảo để prisma dễ query, không tạo cột trong DB
+  reviews       Review[]
+  
+  // Snapshot địa chỉ giao hàng. Tránh việc User sửa địa chỉ trong Profile làm sai lệch đơn cũ.
+  // Lưu cả thông tin Ward/District của GHN vào đây.
+  shippingAddressSnapshot Json 
+  
+  // --- LOGIC TÁCH ĐƠN ---
+  // Trong Marketplace, 1 lần checkout có thể sinh ra nhiều Order (mỗi Order thuộc về 1 Shop).
+  shopId        Int?     
+  shop          User?    @relation("ShopOrders", fields: [shopId], references: [id], onDelete: SetNull)
+  
+  // --- TÀI CHÍNH ---
+  totalProductPrice Float   // Tổng tiền hàng
+  shippingFee       Float   // Phí ship (Tính toán từ GHN API)
+  totalAmount       Float   // Tổng tiền khách phải trả (Hàng + Ship - Voucher)
+  
+  // --- THANH TOÁN ---
+  paymentId     Int?
+  payment       Payment? @relation(fields: [paymentId], references: [id])
+  paymentMethod PaymentMethod @default(COD)
+  
+  // --- VẬN CHUYỂN (GHN) ---
+  shippingServiceId Int?    // ID dịch vụ vận chuyển (Giao nhanh/Giao chuẩn)
+  trackingCode      String? // Mã vận đơn của GHN (VD: GHN123456)
   
   // Audit
-  createdById Int?
-  createdBy   User?                @relation("OrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedById Int?
-  updatedBy   User?                @relation("OrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  deletedById Int?
-  deletedBy   User?                @relation("OrderDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
-  deletedAt   DateTime?
-  createdAt   DateTime             @default(now())
-  updatedAt   DateTime             @updatedAt
+  createdById   Int?
+  createdBy     User?    @relation("OrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById   Int?
+  updatedBy     User?    @relation("OrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  deletedById   Int?
+  deletedBy     User?    @relation("OrderDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+  deletedAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@index([deletedAt])
   @@index([status, deletedAt])
 }
 
+// ============================================================================
+// 6. PAYMENT (THANH TOÁN & ĐỐI SOÁT SEPAY)
+// ============================================================================
+
 model Payment {
-  id           Int                  @id @default(autoincrement())
-  orders       Order[]
-  transactions PaymentTransaction[]
+  id            Int      @id @default(autoincrement())
+  orders        Order[]  // 1 giao dịch thanh toán có thể trả cho nhiều đơn (Gộp đơn)
+  transactions  PaymentTransaction[]
   
-  method       String               @db.VarChar(50)
-  amount       Float
-  status       PaymentStatus
+  method        String   @db.VarChar(50)
+  amount        Float
+  status        PaymentStatus
   
-  createdAt    DateTime             @default(now())
-  updatedAt    DateTime             @updatedAt
+  // Metadata dùng để đối soát với SePay Webhook
+  sepayTransactionCode String? @unique 
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
+// Lưu log chi tiết giao dịch ngân hàng
 model PaymentTransaction {
-  id                 Int      @id @default(autoincrement())
-  paymentId          Int
-  payment            Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  id                Int      @id @default(autoincrement())
+  paymentId         Int
+  payment           Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
   
-  gateway            String   @db.VarChar(100)
-  transactionDate    DateTime @default(now())
-  accountNumber      String?  @db.VarChar(100)
-  subAccount         String?  @db.VarChar(250)
-  amountIn           Int      @default(0)
-  amountOut          Int      @default(0)
-  accumulated        Int      @default(0)
-  code               String?  @db.VarChar(250)
-  transactionContent String?  @db.Text
-  referenceNumber    String?  @db.VarChar(255)
-  body               String?  @db.Text
+  gateway           String   @db.VarChar(100) // "SEPAY", "VNPAY"
+  transactionDate   DateTime @default(now())
   
-  status             PaymentStatus
+  // Thông tin chuyển khoản
+  accountNumber     String?  @db.VarChar(100)
+  subAccount        String?  @db.VarChar(250)
+  amountIn          Int      @default(0)
+  amountOut         Int      @default(0)
+  accumulated       Int      @default(0)
+  code              String?  @db.VarChar(250) // Mã giao dịch ngân hàng
+  transactionContent String? @db.Text         // Nội dung chuyển khoản (thường chứa mã đơn hàng)
+  referenceNumber   String?  @db.VarChar(255)
+  body              String?  @db.Text         // Full JSON body từ webhook (để debug)
+  
+  status            PaymentStatus
 
-  createdAt          DateTime @default(now())
+  createdAt         DateTime @default(now())
 }
 
-// ==========================================
-// COMMUNICATION & FEEDBACK
-// ==========================================
-
-model Websocket {
-  id        String   @id
-  userId    Int
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-}
+// ============================================================================
+// 7. COMMUNICATION (ĐÁNH GIÁ & CHAT)
+// ============================================================================
 
 model Review {
-  id          Int           @id @default(autoincrement())
-  content     String        @db.Text
-  rating      Int
-  orderId     Int
-  order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  productId   Int
-  product     Product       @relation(fields: [productId], references: [id])
-  userId      Int
-  user        User          @relation(fields: [userId], references: [id])
-  medias      ReviewMedia[]
-  updateCount Int           @default(0)
+  id          Int      @id @default(autoincrement())
+  content     String   @db.Text
+  rating      Int      // 1 đến 5 sao
   
-  reply       String?       @db.Text
+  // Review gắn liền với 1 sản phẩm trong 1 đơn hàng cụ thể
+  orderId     Int
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  productId   Int
+  product     Product  @relation(fields: [productId], references: [id])
+  
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id])
+  
+  medias      ReviewMedia[]
+  updateCount Int      @default(0) // Giới hạn số lần sửa review
+  
+  // Shop trả lời review
+  reply       String?  @db.Text
   repliedAt   DateTime?
 
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  @@unique([orderId, productId])
+  @@unique([orderId, productId]) // 1 Sản phẩm trong 1 đơn chỉ được review 1 lần
   @@index([userId])
   @@index([productId])
 }
 
 model ReviewMedia {
-  id        Int       @id @default(autoincrement())
-  url       String    @db.VarChar(1000)
-  type      MediaType
+  id        Int      @id @default(autoincrement())
+  url       String   @db.VarChar(1000) // URL S3
+  type      MediaType // IMAGE, VIDEO
   reviewId  Int
-  review    Review    @relation(fields: [reviewId], references: [id], onDelete: Cascade)
-  createdAt DateTime  @default(now())
+  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
 }
 
+// Chat giữa 2 người (Buyer & Seller)
 model Conversation {
-  id            Int       @id @default(autoincrement())
-  starterId     Int
-  starter       User      @relation("ConversationStarter", fields: [starterId], references: [id])
-  partnerId     Int
-  partner       User      @relation("ConversationPartner", fields: [partnerId], references: [id])
-  messages      Message[]
+  id           Int      @id @default(autoincrement())
+  starterId    Int      // Người bắt đầu chat (Thường là Buyer)
+  starter      User     @relation("ConversationStarter", fields: [starterId], references: [id])
+  partnerId    Int      // Người nhận (Thường là Seller)
+  partner      User     @relation("ConversationPartner", fields: [partnerId], references: [id])
+  messages     Message[]
   
-  lastMessage   String?   @db.Text
+  // Cache tin nhắn cuối để hiển thị list chat cho nhanh, đỡ phải query table Message
+  lastMessage  String?  @db.Text
   lastMessageAt DateTime?
 
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  @@unique([starterId, partnerId])
+  @@unique([starterId, partnerId]) // 2 người chỉ có 1 cuộc hội thoại duy nhất
 }
 
 model Message {
@@ -626,9 +722,9 @@ model Message {
   @@index([conversationId])
 }
 
-// ==========================================
-// ENUMS
-// ==========================================
+// ============================================================================
+// 8. ENUMS 
+// ============================================================================
 
 enum PaymentStatus {
   PENDING
@@ -637,15 +733,21 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum PaymentMethod {
+  COD           // Trả tiền mặt khi nhận hàng
+  BANK_TRANSFER // Chuyển khoản (VietQR/SePay)
+}
+
 enum OrderStatus {
-  PENDING_PAYMENT
-  PENDING_CONFIRMATION
-  PENDING_PICKUP
-  PENDING_DELIVERY
-  DELIVERED
-  RETURN_REQUESTED
-  RETURNED
-  CANCELLED
+  PENDING_PAYMENT      // Chờ thanh toán (nếu chọn Bank Transfer)
+  PENDING_CONFIRMATION // Đã thanh toán/COD -> Chờ Shop xác nhận
+  PREPARING            // Shop đang đóng gói, in đơn
+  PENDING_PICKUP       // Đã báo GHN, chờ shipper đến lấy
+  SHIPPING             // Shipper đã lấy, đang giao
+  DELIVERED            // Giao thành công
+  RETURN_REQUESTED     // Khách yêu cầu trả hàng/hoàn tiền
+  RETURNED             // Đã hoàn trả xong
+  CANCELLED            // Đơn bị hủy
 }
 
 enum VerificationCodeType {
