@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # --- Database Service ---
+  postgres:
+    image: postgres:17-alpine
+    container_name: ecommerce_db
+    ports:
+      - '5432:5432' # Map ra localhost để Code và Prisma Studio kết nối
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}         # Lấy từ .env hoặc mặc định
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password123}
+      POSTGRES_DB: ${DB_NAME:-ecommerce_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck: # healthcheck DB
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: always
+    networks:
+      - ecommerce_net
+
+  # --- Caching/Queue Service ---
+  redis:
+    image: redis:alpine
+    container_name: ecommerce_redis
+    ports:
+      - '6379:6379' # Map ra localhost
+    command: redis-server --appendonly yes # save-mode data 
+    volumes:
+      - redis_data:/data
+    healthcheck: # healthcheck Redis
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: always
+    networks:
+      - ecommerce_net
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  ecommerce_net:
+    driver: bridge
