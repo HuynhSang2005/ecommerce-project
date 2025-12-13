@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { AppModule } from '../src/app.module';
-import { PrismaService } from '../shared/services/prisma.service';
+import { PrismaService } from '../src/shared/services/prisma.service';
 
 describe('Prisma Integration (e2e)', () => {
   let app: INestApplication;
