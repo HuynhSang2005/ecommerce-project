@@ -1,8 +1,9 @@
 generator client {
   provider        = "prisma-client"
-  output          = "../src/infrastructure/database/generated/prisma"
+  output          = "../generated/prisma"
   previewFeatures = ["fullTextSearchPostgres", "postgresqlExtensions"]
-  module = "cjs"
+  runtime         = "nodejs"
+  moduleFormat    = "esm"
 }
 
 datasource db {
